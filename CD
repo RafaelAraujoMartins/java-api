@@ -1,0 +1,75 @@
+CD 
+
+name: CD
+
+on:
+  push:
+    branches: [ "main" ]
+    
+  workflow_dispatch:
+   
+jobs:
+  CD:
+    runs-on: ubuntu-latest
+            
+    steps:
+      - name: Configure SSH Google Cloud
+        run: |
+          mkdir -p ~/.ssh/
+          echo "$SSH_KEY" > ~/.ssh/azure-instance-1_key.pem
+          chmod 600 ~/.ssh/azure-instance-1_key.pem
+          cat >>~/.ssh/config <<END
+          Host AZURE
+            HostName $SSH_HOST
+            User $SSH_USER
+            IdentityFile ~/.ssh/azure-instance-1_key.pem
+            StrictHostKeyChecking no
+          END
+          
+        env:
+          SSH_USER: ${{ secrets.AZURE_SSH_USER }}
+          SSH_KEY: ${{ secrets.AZURE_SSH_KEY }}
+          SSH_HOST: ${{ secrets.AZURE_SSH_HOST }}
+      
+      - name: Checkout repository
+        uses: actions/checkout@v3
+          
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+            
+      - name: Install dependencies
+        run: mvm clean install
+          
+      - name: Run the tests
+        run: npm run test -- --coverage
+        env:
+          CD: true
+                    
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:        
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          
+        run: |
+          mvn -B verify sonar:sonar \
+          -Dsonar.host.url=https://sonarcloud.io \
+          -Dsonar.organization=rafaelaraujomartins
+          -Dsonar.projectKey=RafaelAraujoMartins_java-api
+          -Dsonar.language=java \
+          -Dsonar.java.coveragePlugin=jacoco \
+          -Dwave.test.skip=true
+          
+      - name: Build the application
+        run: mvn -B f pom.xml clean install -Dmaven.test.skip=true
+        
+      - name: Deploy the application
+        run: | 
+          ssh azure 'sudo systemctl stop java-api'
+          ssh azure 'sudo rm -rf /app/java-api'
+          scp -r build azure:/home/rafael/java-api
+          ssh azure 'sudo mv /home/rafael/java-api /app/java-api'
+          ssh azure 'sudo systemctl start java-api'
+          
